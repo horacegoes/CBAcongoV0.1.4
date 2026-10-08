@@ -1,0 +1,56 @@
+name: Build Congo Filter
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find project folder
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem -Path . -Recurse -Depth 4 -Filter CMakeLists.txt |
+               Where-Object { $_.FullName -notmatch '\\(build|_deps|JUCE)\\' } |
+               Sort-Object { $_.FullName.Length } | Select-Object -First 1
+          if (-not $f) {
+            Write-Host "Files in the repository:"
+            Get-ChildItem -Path . -Recurse -Depth 3 | Select-Object -ExpandProperty FullName
+            Write-Error "CMakeLists.txt not found - upload the unzipped files, not the .zip"
+            exit 1
+          }
+          $p = Resolve-Path -Relative $f.DirectoryName
+          Write-Host "Project folder: $p"
+          "PROJ=$p" >> $env:GITHUB_ENV
+
+      - name: Configure (Visual Studio 2022, x64)
+        run: cmake -S "${{ env.PROJ }}" -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build (Release)
+        run: cmake --build build --config Release --parallel
+
+      - name: Run DSP tests
+        shell: pwsh
+        run: |
+          cd "${{ env.PROJ }}/tests"
+          & "$env:GITHUB_WORKSPACE/build/Release/congo_dsp_tests.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:GITHUB_WORKSPACE/build/Release/congo_sustain_tests.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:GITHUB_WORKSPACE/build/Release/congo_eb16_tests.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: CongoFilter-V0.1.4-VST3-Windows
+          path: build/CongoFilter_artefacts/Release/VST3/*.vst3
+
+      - name: Upload Standalone
+        uses: actions/upload-artifact@v4
+        with:
+          name: CongoFilter-V0.1.4-Standalone-Windows
+          path: build/CongoFilter_artefacts/Release/Standalone/*.exe
